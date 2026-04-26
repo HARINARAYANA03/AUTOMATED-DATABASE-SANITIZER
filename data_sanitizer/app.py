@@ -1,96 +1,121 @@
 import streamlit as st
 import pandas as pd
-import time
 
-# 1. Setup Professional Page Layout
-st.set_page_config(page_title="Data Privacy Vault", page_icon="🔒", layout="wide")
+# --- 1. SETUP PAGE CONFIGURATION ---
+st.set_page_config(page_title="Data Masking Studio", layout="wide", page_icon="🔐")
 
-# 2. Add a Sidebar for Project Context
-with st.sidebar:
-    st.title("⚙️ System Info")
-    st.write("**Project:** PII Data Sanitization")
-    st.write("**Environment:** Local / Demo")
-    st.divider()
-    st.info(
-        "**About this Tool:**\n\n"
-        "This portal ingests raw user datasets and automatically redacts "
-        "Personally Identifiable Information (PII) using a zero-trust masking engine."
-    )
+st.title("🔐 Enterprise Data Masking Studio")
+st.markdown("Securely manage and sanitize datasets for different clients using Role-Based Access Control.")
 
-# 3. Main Dashboard Header
-st.title("🔒 Enterprise Data Sanitization Portal")
-st.markdown(
-    "Securely upload raw datasets to automatically mask and redact sensitive information before analysis or database storage.")
+# --- 2. INITIALIZE SESSION STATE (APP MEMORY) ---
+# This keeps track of different clients and their specific masking rules even when the page refreshes.
+if "clients" not in st.session_state:
+    st.session_state.clients = {"Admin": {}}
 
-# 4. File Uploader
+if "selected_client" not in st.session_state:
+    st.session_state.selected_client = "Admin"
+
+# --- 3. FILE UPLOAD (SECURE INGESTION) ---
 uploaded_file = st.file_uploader("📂 Upload Raw Dataset (CSV format)", type=["csv"])
 
-# 5. Application Logic
-if uploaded_file is not None:
-
-    # Read the data and normalize columns
+if uploaded_file:
+    # Read data into memory and clean column names
     df = pd.read_csv(uploaded_file)
-    df.columns = df.columns.str.strip().str.lower()
+    df.columns = df.columns.str.strip()
 
-    # --- DEMO EFFECT: Progress Bar ---
+    # --- 4. SIDEBAR: CLIENT MANAGEMENT ---
+    st.sidebar.title("👥 Client Management")
+    client_names = list(st.session_state.clients.keys())
+
+    # Failsafe: Ensure selected client is valid
+    if st.session_state.selected_client not in client_names:
+        st.session_state.selected_client = "Admin"
+
+    # Dropdown to switch between active clients
+    selected_client = st.sidebar.selectbox(
+        "Select Active Client Profile",
+        client_names,
+        index=client_names.index(st.session_state.selected_client)
+    )
+    st.session_state.selected_client = selected_client
+    st.sidebar.markdown("---")
+
+    # Add a New Client Profile
+    st.sidebar.subheader("➕ Add New Client")
+    new_client = st.sidebar.text_input("Enter Client Name")
+    if st.sidebar.button("Add Client"):
+        if new_client and new_client not in st.session_state.clients:
+            st.session_state.clients[new_client] = {}
+            st.session_state.selected_client = new_client
+            st.rerun()  # Refresh UI to show new client
+        elif new_client in st.session_state.clients:
+            st.sidebar.error("Client name already exists!")
+        else:
+            st.sidebar.error("Please enter a valid name.")
+
+    # Remove an Existing Client Profile
+    st.sidebar.subheader("❌ Remove Client")
+    remove_client = st.sidebar.selectbox(
+        "Select Client to Remove",
+        client_names,
+        key="remove_select"
+    )
+    if st.sidebar.button("Remove Client"):
+        if remove_client == "Admin":
+            st.sidebar.error("The Admin profile cannot be removed.")
+        else:
+            del st.session_state.clients[remove_client]
+            remaining = list(st.session_state.clients.keys())
+            st.session_state.selected_client = remaining[0]
+            st.rerun()  # Refresh UI after deletion
+
+    st.sidebar.success(f"Currently Configuring: {st.session_state.selected_client}")
+
+    # --- 5. MAIN LAYOUT (SPLIT SCREEN) ---
+    left_col, right_col = st.columns([2, 1])
+
+    # Left Column: Raw Data Preview
+    with left_col:
+        st.subheader("📊 Raw Dataset Preview (Top 20 Rows)")
+        # Show only first 20 rows to prevent crashing the browser on large files
+        st.dataframe(df.head(20), use_container_width=True)
+
+    # Right Column: Dynamic Masking Controls
+    with right_col:
+        st.subheader(f"⚙️ Mask Controls → {selected_client}")
+        client_rules = st.session_state.clients[selected_client]
+
+        # Generate a dropdown rule selector for every column in the dataset
+        for col in df.columns:
+            client_rules[col] = st.selectbox(
+                f"Rule for '{col}'",
+                ["No Mask", "Partial Mask", "Full Mask"],
+                index=["No Mask", "Partial Mask", "Full Mask"].index(
+                    client_rules.get(col, "No Mask")  # Default to No Mask
+                ),
+                key=f"{selected_client}_{col}"  # Unique key per client per column
+            )
+
     st.divider()
-    st.subheader("⚙️ Processing Engine Engine")
-    progress_bar = st.progress(0)
-    status_text = st.empty()
 
-    for i in range(100):
-        time.sleep(0.01)  # Simulates heavy processing for 1 second
-        progress_bar.progress(i + 1)
-        status_text.text(f"Scanning rows and applying masking rules... {i + 1}%")
+    # --- 6. SANITIZATION EXECUTION ---
+    run_sanitization = st.button("🚀 Perform Sanitization", use_container_width=True, type="primary")
 
-    status_text.text("✅ Data Sanitization Complete!")
-    st.balloons()  # Triggers a professional success animation
 
-    # --- MASKING ENGINE ---
-    # Create a copy so we can show the before/after
-    df_clean = df.copy()
+    # Core Masking Logic Engine
+    def apply_mask(val, method):
+        # Handle missing/empty values gracefully to prevent crashes
+        if pd.isna(val) or str(val).strip() == "":
+            return "[N/A]"
 
-    df_clean.fillna("[N/A]", inplace=True)
+        val_str = str(val)
 
-    if 'credit_card' in df_clean.columns:
-        df_clean['credit_card'] = df_clean['credit_card'].apply(
-            lambda x: f"****-****-****-{str(x)[-4:]}" if str(x) != "[N/A]" else x)
-    if 'national_id' in df_clean.columns:
-        df_clean['national_id'] = df_clean['national_id'].apply(
-            lambda x: f"***-**-{str(x)[-4:]}" if str(x) != "[N/A]" else x)
-    if 'mobile_no' in df_clean.columns:
-        df_clean['mobile_no'] = df_clean['mobile_no'].apply(lambda x: "**********" if str(x) != "[N/A]" else x)
-    if 'email' in df_clean.columns:
-        df_clean['email'] = df_clean['email'].apply(lambda x: "*****@*****.***" if str(x) != "[N/A]" else x)
-    #if 'full_name' in df_clean.columns:
-        #df_clean['full_name'] = df_clean['full_name'].apply(lambda x: "**********" if str(x) != "[N/A]" else x)
-    if 'ip_address' in df_clean.columns:
-        df_clean['ip_address'] = df_clean['ip_address'].apply(lambda x: "***.***.***.***" if str(x) != "[N/A]" else x)
-
-    # --- KPI METRICS ---
-    st.subheader("📊 Sanitization Report")
-    col1, col2, col3 = st.columns(3)
-    col1.metric(label="Total Rows Processed", value=len(df))
-    col2.metric(label="PII Columns Masked", value="6")
-    col3.metric(label="Security Status", value="100% Secured", delta="Zero-Trust Enforced", delta_color="normal")
-
-    st.divider()
-
-    # --- PROFESSIONAL DISPLAY (TABS) ---
-    tab1, tab2 = st.tabs(["✅ Sanitized Output (Safe for Distribution)", "⚠️ Raw Data (Restricted Access)"])
-
-    with tab1:
-        st.dataframe(df_clean, use_container_width=True)
-        # Download Button
-        csv_data = df_clean.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="⬇️ Download Secure Dataset",
-            data=csv_data,
-            file_name="enterprise_sanitized_data.csv",
-            mime="text/csv",
-            type="primary"
-        )
-
-    with tab2:
-        st.warning("WARNING: You are viewing restricted raw data. Do not distribute.")
-        st.dataframe(df, use_container_width=True)
+        if method == "No Mask":
+            return val_str
+        elif method == "Full Mask":
+            return "*" * len(val_str)  # Complete blackout
+        elif method == "Partial Mask":
+            if len(val_str) <= 4:
+                return "***"  # Too short to partial mask safely
+            # Keep first 2 and last 2 characters, mask the middle
+            return val_str[:2] + "*" * (len(val_str) - 4) + val_str[-2:]
